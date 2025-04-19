@@ -1,0 +1,3 @@
+Çalıştırmak için gerekli diğer dosyalar:
+
+https://drive.google.com/file/d/1uO9QctoWsEK86f7PyVpTbf6zSJR0h0x_/view?usp=sharing
