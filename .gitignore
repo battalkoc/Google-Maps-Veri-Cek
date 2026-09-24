@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.xlsx
+build/
+dist/
+*.spec
+firefox/
+geckodriver.exe

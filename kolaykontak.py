@@ -1,12 +1,11 @@
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton, \
-    QTextEdit, QWidget, QTableWidget, QTableWidgetItem, QHBoxLayout,QStackedWidget, QProgressBar,QInputDialog
+    QTextEdit, QWidget, QTableWidget, QTableWidgetItem, QHBoxLayout,QStackedWidget, QProgressBar,QInputDialog, \
+    QCheckBox, QSpinBox
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.firefox.options import Options
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from PyQt5.QtWidgets import QFileDialog
@@ -18,6 +17,7 @@ import pandas as pd
 import time
 import os
 import sys
+import maps_veri
 
 
 
@@ -26,174 +26,61 @@ class SeleniumThread(QThread):
     log_signal = pyqtSignal(str)
     liste_signal = pyqtSignal(list)
     progress_signal = pyqtSignal(int)
-    finished = pyqtSignal()
+    bitti_signal = pyqtSignal()
 
-    def __init__(self, search_query):
+    def __init__(self, search_query, mail_ara=True, en_fazla=0):
         super().__init__()
         self.search_query = search_query
+        self.mail_ara = mail_ara
+        self.en_fazla = en_fazla
         self._is_running = True
 
-    def resource_path(self,relative_path):
-        if hasattr(sys, '_MEIPASS'):
-            return os.path.join(sys._MEIPASS, relative_path)
-        return os.path.join(os.path.abspath("."), relative_path)
+    def calisiyor(self):
+        return self._is_running
 
     def run(self):
-        firefox_binary_path = "firefox/firefox.exe"
-        gecko_driver_path = "geckodriver.exe"
-
-        firefox_options = Options()
-        firefox_options.binary_location = firefox_binary_path
-        firefox_options.add_argument("--headless")
-
-        service = Service(executable_path=gecko_driver_path,log_path=None)
-        driver = webdriver.Firefox(service=service, options=firefox_options)
-        if not self._is_running:
-            return
+        driver = None
         try:
-
-            sayac = 0
-            driver.get("https://www.google.com/maps/")
+            driver = maps_veri.tarayici_olustur()
             self.log_signal.emit("Google Maps açıldı.")
+            self.log_signal.emit(f"Arama yapılıyor: {self.search_query}")
 
-            arama_metni = self.search_query
-            if not arama_metni:
-                self.log_signal.emit("Lütfen bir arama terimi girin.")
-                return
-
-            self.log_signal.emit(f"Arama yapılıyor: {arama_metni}")
-
-            arama_kutusu = driver.find_element(By.ID, "searchboxinput")
-            arama_kutusu.send_keys(arama_metni)
-
-            ara_butonu = driver.find_element(By.ID, "searchbox-searchbutton")
-            ara_butonu.click()
-
-            time.sleep(5)
-
-            sonuc_basligi = driver.find_element(By.XPATH, "//h1[contains(text(), 'Sonuçlar')]")
-            location = sonuc_basligi.location
-            size = sonuc_basligi.size
-
-            x = location['x'] + size['width'] / 2
-            y = location['y'] + size['height'] / 2
-
-            actions = ActionChains(driver)
-            actions.move_by_offset(x, y).click().perform()
-
-            actions.move_by_offset(-x, -y).perform()
-            if not self._is_running:
-                return
-
-            while True:
-                try:
-
-                    driver.find_element(By.XPATH, "//span[contains(text(), 'Listenin sonuna ulaştınız.')]")
-
-                    break
-                except:
-
-                    actions.send_keys(Keys.SPACE).perform()
-                    time.sleep(0.5)
-
-            a_etiketleri = driver.find_elements(By.TAG_NAME, "a")
-            href_list = [a.get_attribute("href") for a in a_etiketleri if a.get_attribute("href")]
-            total = sum(1 for href in href_list if href.startswith("https://www.google.com/maps/place/"))
+            linkler = maps_veri.isletme_linkleri(driver, self.search_query, self.calisiyor,
+                                                 self.log_signal.emit, self.en_fazla)
+            total = len(linkler)
             self.log_signal.emit(f"{total} adet işletme bulundu!")
-            processed = 0
 
-            for href in href_list:
+            for processed, link in enumerate(linkler, 1):
                 if not self._is_running:
                     break
+                try:
+                    bilgi = maps_veri.isletme_bilgisi(driver, link)
+                except Exception as e:
+                    self.log_signal.emit(f"İşletme okunamadı, atlanıyor: {e.__class__.__name__}")
+                    self.progress_signal.emit(int(processed / total * 100))
+                    continue
+                if self.mail_ara and bilgi["Link"] and self._is_running:
+                    bilgi["Mail"] = maps_veri.eposta_bul(driver, bilgi["Link"])
 
-                if href.startswith("https://www.google.com/maps/place/"):
-                    isletme1 = ""
-                    puan1 = ""
-                    adres1 = ""
-                    link1 = ""
-                    telefon1 = ""
-                    mail1 = ""
-                    link_var = False
-                    driver.get(href)
-                    try:
-                        h1_element = WebDriverWait(driver, 3).until(
-                            EC.presence_of_element_located((By.TAG_NAME, "h1"))
-                        )
-                        self.log_signal.emit(f"İşletme: {h1_element.text}")
-                        isletme1 = str(h1_element.text)
-                    except:
-                        pass
-                    try:
-                        span_element = WebDriverWait(driver, 1).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, 'span[role="img"]'))
-                        )
-                        puan = span_element.get_attribute("aria-label")
-                        if puan and "yıldızlı" in puan:
-                            puan = puan.split(" ")[0].strip()
-                            if puan:
-                                self.log_signal.emit(f"Puan: {puan}")
-                                puan1 = str(puan)
-                    except Exception:
-                        pass
-                    try:
-                        adres_element = WebDriverWait(driver, 1).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, 'button[data-item-id="address"]'))
-                        )
-                        adres = adres_element.get_attribute("aria-label")
-                        if adres and "Adres:" in adres:
-                            adres = adres.split("Adres:")[1].strip()
-                        self.log_signal.emit(f"Adres: {adres}")
-                        adres1 = str(adres)
-                    except:
-                        pass
-                    try:
-                        link_element = WebDriverWait(driver, 1).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, 'a[data-tooltip="Web sitesini aç"]'))
-                        )
-                        href_value = link_element.get_attribute("href")
-                        if href_value:
-                            self.log_signal.emit(f"Link: {href_value}")
-                            link1 = str(href_value)
-                            link_var = True
-                    except Exception:
-                        pass
-                    try:
-                        button_element = WebDriverWait(driver, 1).until(
-                            EC.presence_of_element_located(
-                                (By.CSS_SELECTOR, 'button[data-tooltip="Telefon numarasını kopyala"]'))
-                        )
-                        aria_label_content = button_element.get_attribute("aria-label")
-                        if aria_label_content and "Telefon:" in aria_label_content:
-                            tel = aria_label_content.split("Telefon:")[1].strip()
-                            self.log_signal.emit(tel)
-                            telefon1 = str(tel)
-                    except Exception:
-                        pass
-                    if link_var:
-                        try:
-                            driver.get(link1)
-                            mail_elements = driver.find_elements(By.XPATH, "//*[contains(text(), '@')]")
-                            for mail in mail_elements:
-                                if mail.text.strip():
-                                    self.log_signal.emit(f"Mail: {mail.text}")
-                                    mail1 = str(mail.text)
-                        except:
-                            pass
-                    self.log_signal.emit("-" * 40)
-                    liste = [isletme1, puan1, adres1, link1, telefon1,mail1]
-                    self.liste_signal.emit(liste)
-                    processed += 1
-                    self.progress_signal.emit(int((processed / total) * 100))
-
-
+                self.log_signal.emit(f"İşletme: {bilgi['İşletme']}")
+                for alan in ("Kategori", "Puan", "Adres", "Link", "Telefon", "Mail"):
+                    if bilgi[alan]:
+                        self.log_signal.emit(f"{alan}: {bilgi[alan]}")
+                self.log_signal.emit("-" * 40)
+                self.liste_signal.emit([bilgi[sutun] for sutun in maps_veri.SUTUNLAR])
+                self.progress_signal.emit(int(processed / total * 100))
 
         except Exception as e:
             self.log_signal.emit(f"Hata oluştu: {e}")
 
         finally:
-            driver.quit()
-            self.log_signal.emit("Tarayıcı kapatıldı.")
-            self.finished.emit()
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                self.log_signal.emit("Tarayıcı kapatıldı.")
+            self.bitti_signal.emit()
 
     def stop(self):
         self._is_running = False
@@ -228,10 +115,10 @@ class GoogleMapsApp(QMainWindow):
 
         button_duzeni = QHBoxLayout()
         self.isletme_button = QPushButton("🌐İşletme Bul🌐")
-        self.isletme_button.clicked.connect(lambda: self.switch_page(2))
+        self.isletme_button.clicked.connect(lambda: self.switch_page(0))
         button_duzeni.addWidget(self.isletme_button)
         self.mesaj_button = QPushButton("📨Mesaj Gönder📨")
-        self.mesaj_button.clicked.connect(lambda: self.switch_page(2))
+        self.mesaj_button.clicked.connect(lambda: self.switch_page(1))
         button_duzeni.addWidget(self.mesaj_button)
         self.tema_button = QPushButton("Aydınlık Tema")
         self.tema_button.clicked.connect(self.tema_secim)
@@ -254,8 +141,6 @@ class GoogleMapsApp(QMainWindow):
     def initUI(self):
         if self.kimlik:
             self.stacked_widget.setCurrentIndex(0)
-            self.isletme_button.clicked.connect(lambda: self.switch_page(0))
-            self.mesaj_button.clicked.connect(lambda: self.switch_page(1))
     def lisansSayfasi(self):
         page = QWidget()
         layout = QVBoxLayout()
@@ -321,7 +206,7 @@ class GoogleMapsApp(QMainWindow):
 
     def get_license_file_path(self):
 
-        appdata_path = os.getenv("APPDATA")
+        appdata_path = os.getenv("APPDATA") or os.path.expanduser("~")
         license_folder = os.path.join(appdata_path, "KolayKontak")
         os.makedirs(license_folder, exist_ok=True)
         return os.path.join(license_folder, "license.key")
@@ -352,7 +237,8 @@ class GoogleMapsApp(QMainWindow):
         key = base64.urlsafe_b64encode(password.ljust(32).encode("utf-8")[:32])
         return key
     def switch_page(self, index):
-        self.stacked_widget.setCurrentIndex(index)
+        # Lisans doğrulanmadan yalnızca lisans sayfası açılabilir
+        self.stacked_widget.setCurrentIndex(index if self.kimlik else 2)
     def VeriCek(self):
         page = QWidget()
         layout = QVBoxLayout()
@@ -373,6 +259,16 @@ class GoogleMapsApp(QMainWindow):
         self.stop_button.clicked.connect(self.stop_thread)
         giris_düzen.addWidget(self.stop_button)
 
+        secenek_duzen = QHBoxLayout()
+        self.mail_checkbox = QCheckBox("Web sitelerinde mail ara (yavaş)")
+        self.mail_checkbox.setChecked(True)
+        secenek_duzen.addWidget(self.mail_checkbox)
+        secenek_duzen.addStretch()
+        secenek_duzen.addWidget(QLabel("En fazla işletme (0 = sınırsız):"))
+        self.limit_input = QSpinBox()
+        self.limit_input.setRange(0, 1000)
+        secenek_duzen.addWidget(self.limit_input)
+
         self.result_output = QTextEdit()
         self.result_output.setReadOnly(True)
         self.progress_bar = QProgressBar()
@@ -380,12 +276,15 @@ class GoogleMapsApp(QMainWindow):
         self.save_button = QPushButton("Verileri Kaydet")
         self.save_button.clicked.connect(self.save_data)
 
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["İşletme", "Puan", "Adres", "Link", "Telefon","Mail"])
+        self.table = QTableWidget(0, len(maps_veri.SUTUNLAR))
+        self.table.setHorizontalHeaderLabels(maps_veri.SUTUNLAR)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Stretch)
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setStretchLastSection(True)
+        self.table.setSortingEnabled(False)
 
         layout.addLayout(giris_düzen)
+        layout.addLayout(secenek_duzen)
         layout.addWidget(self.result_output)
         layout.addWidget(self.save_button)
         layout.addWidget(self.progress_bar)
@@ -562,7 +461,7 @@ class GoogleMapsApp(QMainWindow):
                 row_data.append(item.text() if item else "")
             data.append(row_data)
 
-        df = pd.DataFrame(data, columns=["İşletme", "Puan", "Adres", "Link", "Telefon","Mail"])
+        df = pd.DataFrame(data, columns=maps_veri.SUTUNLAR)
         df.to_excel(file_path, index=False)
         self.log(f"Veriler başarıyla {file_path} dosyasına kaydedildi.")
     def append_to_excel(self, file_path, rows):
@@ -571,9 +470,9 @@ class GoogleMapsApp(QMainWindow):
             existing_df = pd.read_excel(file_path)
         except FileNotFoundError:
 
-            existing_df = pd.DataFrame(columns=["İşletme", "Puan", "Adres", "Link", "Telefon","Mail"])
+            existing_df = pd.DataFrame(columns=maps_veri.SUTUNLAR)
 
-        new_df = pd.DataFrame(rows, columns=["İşletme", "Puan", "Adres", "Link", "Telefon","Mail"])
+        new_df = pd.DataFrame(rows, columns=maps_veri.SUTUNLAR)
         updated_df = pd.concat([existing_df, new_df], ignore_index=True)
         updated_df.to_excel(file_path, index=False)
     def design_dark(self):
@@ -788,10 +687,10 @@ class GoogleMapsApp(QMainWindow):
             self.tema_button.setText("Aydınlık Tema")
             self.design_dark()
     def stop_thread(self):
-        self.thread.stop()
-        self.thread.wait()
-        self.log("İşlem durduruldu!")
-        self.on_thread_finished()
+        if self.thread and self.thread.isRunning():
+            self.thread.stop()
+            self.stop_button.setEnabled(False)
+            self.log("Durduruluyor, mevcut işletme tamamlanınca tarayıcı kapanacak...")
     def add_row(self, row_data):
         row = self.table.rowCount()
         self.table.insertRow(row)
@@ -802,17 +701,18 @@ class GoogleMapsApp(QMainWindow):
             self.append_to_excel(self.current_file_path, [row_data])
     def start_selenium_thread(self):
         self.clear_all()
-        search_query = self.search_input.text()
+        search_query = self.search_input.text().strip()
         if not search_query:
             self.log("Lütfen bir arama terimi girin.")
             return
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.log("Tarayıcı başlatılıyor...")
-        self.thread = SeleniumThread(search_query)
+        self.progress_bar.setValue(0)
+        self.thread = SeleniumThread(search_query, self.mail_checkbox.isChecked(), self.limit_input.value())
         self.thread.log_signal.connect(self.log)
         self.thread.liste_signal.connect(self.add_row)
-        self.thread.finished.connect(self.on_thread_finished)
+        self.thread.bitti_signal.connect(self.on_thread_finished)
         self.thread.progress_signal.connect(self.update_progress_bar)
         self.thread.start()
     def update_progress_bar(self, value):

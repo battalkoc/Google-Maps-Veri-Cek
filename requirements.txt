@@ -1,0 +1,5 @@
+PyQt5>=5.15
+selenium>=4.10
+pandas>=1.5
+openpyxl>=3.1
+cryptography>=41
